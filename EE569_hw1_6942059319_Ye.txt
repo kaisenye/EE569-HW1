@@ -1,0 +1,1282 @@
+
+p1a.cpp ================================================================================================================
+#include <iostream>
+#include <fstream>
+#include <vector>
+#include <cmath>
+
+
+// Function to save a raw image
+void saveRawImage(const std::string& filename, 
+                  const std::vector<unsigned char>& imageData, 
+                  int width, 
+                  int height) {
+    std::ofstream outFile(filename, std::ios::binary);
+    if (!outFile) {
+        std::cerr << "Could not open the file for writing: " << filename << std::endl;
+        return;
+    }
+
+    // write the data to image. 
+    outFile.write(reinterpret_cast<const char*>(imageData.data()), imageData.size());
+
+    if (!outFile.good()) {
+        std::cerr << "Error occurred at writing time!" << std::endl;
+    }
+
+    outFile.close();
+}
+
+// Function to perform bilinear interpolation on a single channel
+unsigned char bilinearInterpolate(const std::vector<unsigned char>& rawData, 
+                                  int x, 
+                                  int y, 
+                                  int width, 
+                                  int height, 
+                                  int channelOffset, 
+                                  int channelStep) {
+    int sum = 0;
+    int count = 0;
+
+    for (int dy = -1; dy <= 1; dy += 2) {
+        for (int dx = -1; dx <= 1; dx += 2) {
+            int newX = x + dx;
+            int newY = y + dy;
+            if (newX >= 0 && newX < width && newY >= 0 && newY < height) {
+                sum += rawData[(newY * width + newX) * 3 + channelOffset];
+                count++;
+            }
+        }
+    }
+
+    return count > 0 ? static_cast<unsigned char>(sum / count) : 0;
+}
+
+// Function for bilinear demosaicing
+void bilinearDemosaicing(const std::vector<unsigned char>& rawData, 
+                         std::vector<unsigned char>& outputData, 
+                         int width, int height) {
+
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            int index = (y * width + x) * 3; // Output index for BGR image
+
+            if ((y % 2 == 0) && (x % 2 == 0)) {
+                // Current pixel is red
+                outputData[index + 2] = rawData[y * width + x]; // Red channel
+                outputData[index + 1] = bilinearInterpolate(rawData, x, y, width, height, 1, 3); // Green channel
+                outputData[index] = bilinearInterpolate(rawData, x, y, width, height, 0, 3); // Blue channel
+            } else if ((y % 2 == 1) && (x % 2 == 1)) {
+                // Current pixel is blue
+                outputData[index] = rawData[y * width + x]; // Blue channel
+                outputData[index + 1] = bilinearInterpolate(rawData, x, y, width, height, 1, 3); // Green channel
+                outputData[index + 2] = bilinearInterpolate(rawData, x, y, width, height, 2, 3); // Red channel
+            } else {
+                // Current pixel is green
+                outputData[index + 1] = rawData[y * width + x]; // Green channel
+            }
+
+             // Bilinearly interpolate red and blue based on row parity
+            if (y % 2 == 0) {
+                outputData[index + 2] = bilinearInterpolate(rawData, x, y, width, height, 2, 3); // Red channel
+                outputData[index] = (x > 0) ? rawData[y * width + (x - 1)] : rawData[y * width + (x + 1)]; // Blue channel
+            } else {
+                outputData[index] = bilinearInterpolate(rawData, x, y, width, height, 0, 3); // Blue channel
+                outputData[index + 2] = (x > 0) ? rawData[y * width + (x - 1)] : rawData[y * width + (x + 1)]; // Red channel
+            }
+        }
+    }
+
+    // save the output data as a raw image file
+    saveRawImage("./outputs/demosaicisedHouseImage.raw", outputData, width, height);
+}
+
+
+
+// Function to compare two images
+void compareImages(const std::vector<unsigned char>& image1, 
+                   const std::vector<unsigned char>& image2, 
+                   int width, 
+                   int height) {
+    // threshold for significant difference
+    const unsigned char threshold = 10; 
+    int count = 0;
+
+    for (size_t i = 0; i < width * height * 3; i += 3) {
+        // Compute absolute difference for each channel
+        unsigned char diffB = std::abs(image1[i] - image2[i]);
+        unsigned char diffG = std::abs(image1[i + 1] - image2[i + 1]);
+        unsigned char diffR = std::abs(image1[i + 2] - image2[i + 2]);
+
+        if (diffB > threshold || diffG > threshold || diffR > threshold) {
+            size_t pixelIdx = i / 3;
+            std::cout << "Significant difference at pixel " << pixelIdx << 
+            ", with B:" << static_cast<int>(diffB) <<
+            ", G:" << static_cast<int>(diffG) <<
+            ", R:" << static_cast<int>(diffR) << " intensity differences." << std::endl;
+            count++;
+        }
+    }
+
+    std::cout << "Total number of pixels with significant differences: " << count << std::endl;
+}
+
+// main
+int main() {
+    // initialize variables
+    const std::string houseFilename = "./images/House.raw";
+    const int width = 420;
+    const int height = 288;
+
+    // open the raw file
+    std::ifstream file(houseFilename, std::ios::binary);
+    if (!file) {
+        std::cerr << "Error opening file!" << std::endl;
+        return 1; // Error code
+    }
+
+    // read the raw data
+    std::vector<unsigned char> rawData(width * height);
+    file.read(reinterpret_cast<char*>(rawData.data()), rawData.size());
+    file.close();
+
+    // output data
+    std::vector<unsigned char> outputImage(width * height * 3); // Output image (BGR)
+
+    // perform bilinear demosaicing
+    bilinearDemosaicing(rawData, outputImage, width, height);
+
+    // convert House_ori image into vector
+    const std::string houseOriFilename = "./images/House_ori.raw";
+    std::ifstream file2(houseOriFilename, std::ios::binary);
+    if (!file2) {
+        std::cerr << "Error opening file!" << std::endl;
+        return 1; // Error code
+    }
+    std::vector<unsigned char> rawData2(width * height);
+    file2.read(reinterpret_cast<char*>(rawData2.data()), rawData2.size());
+    file2.close();
+
+    // compare the images
+    compareImages(outputImage, rawData2, width, height);
+
+    return 0;
+}
+
+
+p1b.cpp ================================================================================================================
+#include <iostream>
+#include <fstream>
+#include <vector>
+#include <algorithm>
+#include <numeric>
+#include <string>
+#include <functional>
+
+// Function: transfer function
+void transferFunction(const std::string &inputFile, 
+                      const std::string &outputFile,
+                      int width, 
+                      int height) {
+
+    // open the input file
+    std::ifstream file(inputFile, std::ios::binary);
+    if (!file.is_open()) {
+        std::cerr << "Unable to open file " << inputFile << std::endl;
+        return;
+    }
+
+    // read the image data
+    std::vector<unsigned char> image(width * height);
+    file.read(reinterpret_cast<char*>(image.data()), image.size());
+    file.close();
+
+
+    // count the frequency of pixels for each grayscale value
+    int frequency[256] = {0};
+    for (unsigned char pixel : image) {
+        frequency[pixel]++;
+    }
+
+    // calculate probability of each grayscale value
+    int totalPixels = width * height;
+    double probability[256] = {0};
+    for (int i = 0; i < 256; ++i) {
+        probability[i] = static_cast<double>(frequency[i]) / totalPixels;
+    }
+
+    // calculate cumulative probability
+    double cumulativeProbability[256] = {0};
+    cumulativeProbability[0] = probability[0];
+    for (int i = 1; i < 256; ++i) {
+        cumulativeProbability[i] = cumulativeProbability[i - 1] + probability[i];
+    }
+
+    // calculate transfer function
+    int scale = 255;
+    int mapping[256] = {0};
+    for (int i = 0; i < 256; ++i) {
+        int mappedValue = static_cast<int>(cumulativeProbability[i] * scale);
+        mapping[i] = (mappedValue > 255) ? 255 : mappedValue;
+    }
+
+    // apply mapping to get enhanced image
+    std::vector<unsigned char> enhancedImage(width * height);
+    for (int i = 0; i < width * height; ++i) {
+        enhancedImage[i] = mapping[image[i]];
+    }
+
+    // write the enhanced image to a file
+    std::ofstream outFile(outputFile, std::ios::binary);
+    if (!outFile.is_open()) {
+        std::cerr << "Unable to open file for enhanced image: " << outputFile << std::endl;
+        return;
+    }
+    outFile.write(reinterpret_cast<char*>(enhancedImage.data()), enhancedImage.size());
+    outFile.close();
+
+}
+
+
+// Function: bucket filling
+void bucketFilling(const std::string &inputFile, 
+                    const std::string &outputFile,
+                    int width, 
+                    int height) {
+    // read the image data from file
+    std::ifstream file(inputFile, std::ios::binary);
+    if (!file.is_open()) {
+        std::cerr << "Unable to open file " << inputFile << std::endl;
+        return;
+    }
+    std::vector<unsigned char> image(width * height);
+    file.read(reinterpret_cast<char*>(image.data()), image.size());
+    file.close();
+
+    // calculate the histogram
+    int histogram[256] = {0};
+    for (unsigned char pixel : image) {
+        histogram[pixel]++;
+    }
+
+    // total number of pixels
+    int num_pixels = width * height;
+
+    // bumber of buckets
+    // for 8-bit grayscale images
+    int num_buckets = 256; 
+
+    // calculate the ideal number of pixels per bucket
+    int pixels_per_bucket = num_pixels / num_buckets;
+
+    // create the mapping for new pixel values
+    std::vector<unsigned char> new_values(256);
+    int accumulated_pixels = 0;
+    int current_bucket = 0;
+
+    // distribute pixels into new buckets
+    for (int i = 0; i < 256; ++i) {
+        accumulated_pixels += histogram[i];
+        while (accumulated_pixels >= pixels_per_bucket && current_bucket < 255) {
+            accumulated_pixels -= pixels_per_bucket;
+            current_bucket++;
+        }
+        new_values[i] = current_bucket;
+    }
+
+    // apply the new values to the image
+    for (unsigned char &pixel : image) {
+        pixel = new_values[pixel];
+    }
+
+    // write the enhanced image to a file
+    std::ofstream outFile(outputFile, std::ios::binary);
+    if (!outFile.is_open()) {
+        std::cerr << "Unable to open file for enhanced image: " << outputFile << std::endl;
+        return;
+    }
+    outFile.write(reinterpret_cast<char*>(image.data()), image.size());
+    outFile.close();
+}
+
+
+
+int main() {
+    // paths
+    std::string inputFile = "./images/DimLight.raw";  // original image
+    std::string outputFileTf = "./outputs/tfDimLight.raw"; // enhanced image by transfer function
+    std::string outputFileBf = "./outputs/bfDimLight.raw"; // enhanced image by bucket filling
+
+    int width = 596;
+    int height = 340;
+
+    // apply transfer function
+    transferFunction(inputFile, outputFileTf, width, height);
+
+    // apply bucket filling
+    bucketFilling(inputFile, outputFileBf, width, height);
+
+    
+    return 0;
+}
+
+
+p1c.cpp ================================================================================================================
+#include <vector>
+#include <iostream>
+#include <fstream>
+#include <string>
+
+
+struct RGB {
+    unsigned char r;
+    unsigned char g;
+    unsigned char b;
+};
+
+struct YUV {
+    unsigned char y;
+    unsigned char u;
+    unsigned char v;
+};
+
+YUV rgbToYuv(const RGB& rgb) {
+    YUV yuv;
+    yuv.y = static_cast<unsigned char>(0.257 * rgb.r + 0.504 * rgb.g + 0.098 * rgb.b + 16);
+    yuv.u = static_cast<unsigned char>(-0.148 * rgb.r - 0.291 * rgb.g + 0.439 * rgb.b + 128);
+    yuv.v = static_cast<unsigned char>(0.439 * rgb.r - 0.368 * rgb.g - 0.071 * rgb.b + 128);
+    return yuv;
+}
+
+RGB yuvToRgb(const YUV& yuv) {
+    RGB rgb;
+    rgb.r = static_cast<unsigned char>(yuv.y + 1.13983 * (yuv.v - 128));
+    rgb.g = static_cast<unsigned char>(yuv.y - 0.39465 * (yuv.u - 128) - 0.58060 * (yuv.v - 128));
+    rgb.b = static_cast<unsigned char>(yuv.y + 2.03211 * (yuv.u - 128));
+    return rgb;
+}
+
+
+// Function: transform RGB to YUV
+void transformRGBToYUV(std::vector<YUV>& yuvImage,
+                       const std::string &inputFile,
+                       int width,
+                       int height) {
+    // open the input file
+    std::ifstream file(inputFile, std::ios::binary);
+    if (!file.is_open()) {
+        std::cerr << "Unable to open file " << inputFile << std::endl;
+        return;
+    }
+
+    // read the RGB data from the file
+    std::vector<RGB> rgbImage(width * height);
+    file.read(reinterpret_cast<char*>(rgbImage.data()), rgbImage.size() * sizeof(RGB));
+    file.close();
+
+    for (const auto& pixel : rgbImage) {
+        yuvImage.push_back(rgbToYuv(pixel));
+    }
+}
+
+// Function: transform YUV to RGB and store in a raw file
+void transformYUVToRGB(const std::vector<YUV>& yuvImage, 
+                      const std::string &outputFile) {
+    
+    // create a vector to store the RGB values
+    std::vector<RGB> rgbImage;
+
+    // transform YUV to RGB and store in rgbImage
+    for (const auto& pixel : yuvImage) {
+        rgbImage.push_back(yuvToRgb(pixel));
+    }
+
+    // store the RGB values in a output raw file
+    std::ofstream outFile(outputFile, std::ios::binary);
+    if (!outFile.is_open()) {
+        std::cerr << "Unable to open file for enhanced image: " << outputFile << std::endl;
+        return;
+    }
+    outFile.write(reinterpret_cast<char*>(rgbImage.data()), rgbImage.size() * sizeof(RGB));
+}
+
+
+// Function: transfer function for Y channel ============================================================================
+void transferFunctionYChannel(std::vector<YUV>& yuvImage, 
+                              int width, 
+                              int height) {
+    // count the frequency of pixels for each grayscale value in the Y channel
+    int frequency[256] = {0};
+    for (const auto& pixel : yuvImage) {
+        frequency[pixel.y]++;
+    }
+
+    // calculate probability of each grayscale value in the Y channel
+    int totalPixels = width * height;
+    double probability[256] = {0};
+    for (int i = 0; i < 256; ++i) {
+        probability[i] = static_cast<double>(frequency[i]) / totalPixels;
+    }
+
+    // calculate cumulative probability for the Y channel
+    double cumulativeProbability[256] = {0};
+    cumulativeProbability[0] = probability[0];
+    for (int i = 1; i < 256; ++i) {
+        cumulativeProbability[i] = cumulativeProbability[i - 1] + probability[i];
+    }
+
+    // calculate transfer function for the Y channel
+    int scale = 255;
+    int mapping[256] = {0};
+    for (int i = 0; i < 256; ++i) {
+        int mappedValue = static_cast<int>(cumulativeProbability[i] * scale);
+        mapping[i] = (mappedValue > 255) ? 255 : mappedValue;
+    }
+
+    // apply mapping to get enhanced Y channel
+    for (auto& pixel : yuvImage) {
+        pixel.y = mapping[pixel.y];
+    }
+}
+
+
+// Function: bucket filling for Y channel ==============================================================================
+void bucketFillingYChannel(std::vector<YUV>& yuvImage, 
+                           int width, 
+                           int height) {
+    // calculate the histogram for the Y channel
+    int histogram[256] = {0};
+    for (const auto& pixel : yuvImage) {
+        histogram[pixel.y]++;
+    }
+
+    // total number of pixels
+    int num_pixels = width * height;
+
+    // number of buckets for 8-bit grayscale images
+    int num_buckets = 256; 
+
+    // calculate the ideal number of pixels per bucket
+    int pixels_per_bucket = num_pixels / num_buckets;
+
+    // create the mapping for new pixel values
+    std::vector<unsigned char> new_values(256);
+    int accumulated_pixels = 0;
+    int current_bucket = 0;
+
+    // distribute pixels into new buckets
+    for (int i = 0; i < 256; ++i) {
+        accumulated_pixels += histogram[i];
+        while (accumulated_pixels >= pixels_per_bucket && current_bucket < 255) {
+            accumulated_pixels -= pixels_per_bucket;
+            current_bucket++;
+        }
+        new_values[i] = current_bucket;
+    }
+
+    // apply the new values to the Y channel
+    for (auto& pixel : yuvImage) {
+        pixel.y = new_values[pixel.y];
+    }
+}
+
+
+// CLAHE ==============================================================================================================
+
+// Sub-function: clip the histogram
+void clipHistogram(std::vector<int>& histogram, int clipLimit) {
+    int excess = 0;
+    for (auto& h : histogram) {
+        if (h > clipLimit) {
+            excess += h - clipLimit;
+            h = clipLimit;
+        }
+    }
+
+    int increment = excess / histogram.size();
+    int residual = excess % histogram.size();
+
+    for (auto& h : histogram) {
+        h += increment;
+        if (residual > 0) {
+            h++;
+            residual--;
+        }
+    }
+}
+
+// Sub-function: perform histogram equalization on a tile
+void equalizeHistogramTile(std::vector<YUV>& image, int width, int startX, int startY, int tileSizeX, int tileSizeY, int clipLimit) {
+    int endX = std::min(startX + tileSizeX, width);
+    int endY = std::min(startY + tileSizeY, static_cast<int>(image.size() / width));
+
+    std::vector<int> histogram(256, 0);
+    for (int y = startY; y < endY; ++y) {
+        for (int x = startX; x < endX; ++x) {
+            histogram[image[y * width + x].y]++;
+        }
+    }
+
+    if (clipLimit > 0) {
+        clipHistogram(histogram, clipLimit);
+    }
+
+    // calculate CDF
+    std::vector<int> cdf(256, 0);
+    cdf[0] = histogram[0];
+    for (int i = 1; i < 256; ++i) {
+        cdf[i] = cdf[i - 1] + histogram[i];
+    }
+
+    // normalize the CDF
+    int total = cdf[255];
+    for (int i = 0; i < 256; ++i) {
+        cdf[i] = (cdf[i] * 255) / total;
+    }
+
+    // apply the equalized histogram to the pixels
+    for (int y = startY; y < endY; ++y) {
+        for (int x = startX; x < endX; ++x) {
+            image[y * width + x].y = static_cast<unsigned char>(cdf[image[y * width + x].y]);
+        }
+    }
+}
+
+// Main CLAHE function with tile number
+void applyCLAHE(std::vector<YUV>& image, int width, int height, int numTilesX, int numTilesY, int clipLimit) {
+    // calculate tile size based on the number of tiles
+    int tileSizeX = width / numTilesX;
+    int tileSizeY = height / numTilesY;
+
+    // apply histogram equalization to each tile
+    for (int y = 0; y < height; y += tileSizeY) {
+        for (int x = 0; x < width; x += tileSizeX) {
+            equalizeHistogramTile(image, width, x, y, tileSizeX, tileSizeY, clipLimit);
+        }
+    }
+}
+
+
+int main() {
+    // image dimensions
+    int width = 750;  
+    int height = 422; 
+
+    // input file path
+    std::string inputFile = "./images/City.raw";  
+
+    // create a vector to store the YUV values
+    std::vector<YUV> yuvImage;
+
+    // transform RGB to YUV, and store in yuvImage
+    transformRGBToYUV(yuvImage, inputFile, width, height);
+
+    // apply transfer function to Y channel
+    transferFunctionYChannel(yuvImage, width, height);
+
+    // transform YUV to RGB, and store in rgbImage
+    transformYUVToRGB(yuvImage, "./outputs/CityDefogged_TF.raw");
+
+    // apply bucket filling to Y channel
+    bucketFillingYChannel(yuvImage, width, height);
+
+    // transform YUV to RGB, and store in rgbImage
+    transformYUVToRGB(yuvImage, "./outputs/CityDefogged_BF.raw");
+
+    // apply CLAHE
+    int numTilesX = 4; // number of tiles in X direction
+    int numTilesY = 4; // number of tiles in Y direction
+    int clipLimit = 20; // contrast limit for histogram clipping
+    applyCLAHE(yuvImage, width, height, numTilesX, numTilesY, clipLimit);
+
+    // transform YUV to RGB, and store in rgbImage
+    transformYUVToRGB(yuvImage, "./outputs/CityDefogged_CLAHE.raw");
+
+    return 0;
+}
+
+
+
+p2a.cpp ================================================================================================================
+#include <iostream>
+#include <fstream>
+#include <vector>
+#include <cmath>
+#include <string>
+
+// image dimensions
+const int WIDTH = 768; 
+const int HEIGHT = 512; 
+
+// Helper function: read RAW image data
+std::vector<unsigned char> readRawImage(const std::string& filename) {
+    std::ifstream file(filename, std::ios::binary);
+    if (!file) {
+        std::cerr << "Cannot open the file: " << filename << std::endl;
+        return std::vector<unsigned char>();
+    }
+    
+    // Read the contents of the file into a vector
+    std::vector<unsigned char> buffer(
+        (std::istreambuf_iterator<char>(file)),
+        std::istreambuf_iterator<char>()
+    );
+    return buffer;
+}
+
+// Helper function: write RAW image data
+void writeRawImage(const std::string& filename, 
+                   const std::vector<unsigned char>& image_data) {
+    std::ofstream file(filename, std::ios::binary);
+    file.write(reinterpret_cast<const char*>(&image_data[0]), image_data.size() * sizeof(unsigned char));
+}
+
+// Function: uniform weight filter to the image
+void applyUniformFilter(const std::vector<unsigned char>& input, 
+                        std::vector<unsigned char>& output, 
+                        int kernelSize) {
+    int offset = kernelSize / 2;
+    for (int y = offset; y < HEIGHT - offset; ++y) {
+        for (int x = offset; x < WIDTH - offset; ++x) {
+            int sum = 0;
+            for (int dy = -offset; dy <= offset; ++dy) {
+                for (int dx = -offset; dx <= offset; ++dx) {
+                    sum += input[(y + dy) * WIDTH + (x + dx)];
+                }
+            }
+            output[y * WIDTH + x] = sum / (kernelSize * kernelSize);
+        }
+    }
+}
+
+// Helper function: calculate Gaussian weight
+double gaussian(double x, double y, double sigma) {
+    return exp(-(x * x + y * y) / (2 * sigma * sigma)) / (2 * M_PI * sigma * sigma);
+}
+
+// Function: Gaussian filter to the image
+void applyGaussianFilter(const std::vector<unsigned char>& input, 
+                         std::vector<unsigned char>& output, 
+                         int kernelSize, 
+                         double sigma) {
+    int offset = kernelSize / 2;
+    std::vector<double> kernel(kernelSize * kernelSize);
+    double sumKernel = 0;
+
+    // create the Gaussian kernel
+    for (int y = -offset; y <= offset; ++y) {
+        for (int x = -offset; x <= offset; ++x) {
+            kernel[(y + offset) * kernelSize + (x + offset)] = gaussian(x, y, sigma);
+            sumKernel += kernel[(y + offset) * kernelSize + (x + offset)];
+        }
+    }
+
+    // normalize the kernel
+    for (double &value : kernel) {
+        value /= sumKernel;
+    }
+
+    // apply the Gaussian kernel to the image
+    for (int y = offset; y < HEIGHT - offset; ++y) {
+        for (int x = offset; x < WIDTH - offset; ++x) {
+            double sum = 0;
+            for (int dy = -offset; dy <= offset; ++dy) {
+                for (int dx = -offset; dx <= offset; ++dx) {
+                    sum += input[(y + dy) * WIDTH + (x + dx)] * kernel[(dy + offset) * kernelSize + (dx + offset)];
+                }
+            }
+            output[y * WIDTH + x] = static_cast<unsigned char>(sum);
+        }
+    }
+}
+
+
+int main() {
+    std::string inputFilename = "./images/Flower_gray_noisy.raw";
+    std::string uniformOutputFilename = "./outputs/Flower_gray_uniform.raw";
+    std::string gaussianOutputFilename = "./outputs/Flower_gray_gaussian.raw";
+
+    std::vector<unsigned char> image_data = readRawImage(inputFilename);
+    std::vector<unsigned char> uniform_filtered_image(WIDTH * HEIGHT);
+    std::vector<unsigned char> gaussian_filtered_image(WIDTH * HEIGHT);
+
+    // Apply uniform filter 
+    // with a kernel size of 3
+    applyUniformFilter(image_data, uniform_filtered_image, 3);
+
+    // Apply Gaussian filter 
+    // with a kernel size of 3 and sigma of 1.0
+    applyGaussianFilter(image_data, gaussian_filtered_image, 3, 1.0);
+
+    // save the filtered images
+    writeRawImage(uniformOutputFilename, uniform_filtered_image);
+    writeRawImage(gaussianOutputFilename, gaussian_filtered_image);
+
+    std::cout << "Filtering completed." << std::endl;
+
+    return 0;
+}
+
+
+
+p2b.cpp ================================================================================================================
+#include <iostream>
+#include <fstream>
+#include <vector>
+#include <cmath>
+#include <string>
+
+// image dimensions
+const int WIDTH = 768; 
+const int HEIGHT = 512; 
+
+// Helper function: read RAW image data
+std::vector<unsigned char> readRawImage(const std::string& filename) {
+    std::ifstream file(filename, std::ios::binary);
+    if (!file) {
+        std::cerr << "Cannot open the file: " << filename << std::endl;
+        return std::vector<unsigned char>();
+    }
+    
+    // Read the contents of the file into a vector
+    std::vector<unsigned char> buffer(
+        (std::istreambuf_iterator<char>(file)),
+        std::istreambuf_iterator<char>()
+    );
+    return buffer;
+}
+
+// Helper function: write RAW image data
+void writeRawImage(const std::string& filename, 
+                   const std::vector<unsigned char>& image_data) {
+    std::ofstream file(filename, std::ios::binary);
+    file.write(reinterpret_cast<const char*>(&image_data[0]), image_data.size() * sizeof(unsigned char));
+}
+
+// Helper function: to clamp pixel values
+inline unsigned char clamp(int value, int low, int high) {
+    return static_cast<unsigned char>(std::max(low, std::min(value, high)));
+}
+
+// Function: bilateral filter
+void bilateralFilter(const std::vector<unsigned char>& flatImage,
+                     std::vector<unsigned char>& filteredImage,
+                     int filterSize,
+                     double sigmaI,
+                     double sigmaS) {
+    // precompute Gaussian domain weights
+    double twoSigmaS2 = 2.0 * sigmaS * sigmaS;
+    double twoSigmaI2 = 2.0 * sigmaI * sigmaI;
+    std::vector< std::vector<double> > gaussianDomain(filterSize, std::vector<double>(filterSize));
+    int halfFilterSize = filterSize / 2;
+
+    for (int i = -halfFilterSize; i <= halfFilterSize; ++i) {
+        for (int j = -halfFilterSize; j <= halfFilterSize; ++j) {
+            gaussianDomain[i + halfFilterSize][j + halfFilterSize] = exp(-(i * i + j * j) / twoSigmaS2);
+        }
+    }
+
+    // apply the filter to each pixel
+    for (int i = 0; i < HEIGHT; ++i) {
+        for (int j = 0; j < WIDTH; ++j) {
+            double sumWeights = 0.0;
+            double sumFilteredPixel = 0.0;
+            
+            for (int fi = -halfFilterSize; fi <= halfFilterSize; ++fi) {
+                for (int fj = -halfFilterSize; fj <= halfFilterSize; ++fj) {
+                    int ni = i + fi;
+                    int nj = j + fj;
+
+                    // Mirror boundaries
+                    ni = std::max(0, std::min(ni, HEIGHT - 1));
+                    nj = std::max(0, std::min(nj, WIDTH - 1));
+
+                    double rangeKernel = exp(-pow(static_cast<double>(flatImage[i * WIDTH + j]) - flatImage[ni * WIDTH + nj], 2) / twoSigmaI2);
+                    double weight = gaussianDomain[fi + halfFilterSize][fj + halfFilterSize] * rangeKernel;
+
+                    sumWeights += weight;
+                    sumFilteredPixel += flatImage[ni * WIDTH + nj] * weight;
+                }
+            }
+
+            filteredImage[i * WIDTH + j] = clamp(static_cast<int>(sumFilteredPixel / sumWeights), 0, 255);
+        }
+    }
+}
+
+
+
+int main() {
+    std::string inputFilename = "./images/Flower_gray_noisy.raw";
+    std::string bilateralOutputFilename = "./outputs/Flower_gray_bilateral.raw";
+
+    std::vector<unsigned char> image_data = readRawImage(inputFilename);
+    std::vector<unsigned char> bilateral_filtered_image(WIDTH * HEIGHT);
+
+    int filterSize = 5; // 5x5 filter
+    double sigmaI = 12.0; // Intensity sigma
+    double sigmaS = 16.0; // Spatial sigma
+
+    // Apply bilateral filter 
+    bilateralFilter(image_data, bilateral_filtered_image, filterSize, sigmaI, sigmaS);
+
+    // save the filtered images
+    writeRawImage(bilateralOutputFilename, bilateral_filtered_image);
+
+    std::cout << "Bilateral filtering completed." << std::endl;
+
+    return 0;
+}
+
+
+
+p2c.cpp ================================================================================================================
+
+#include <iostream>
+#include <fstream>
+#include <vector>
+#include <cmath>
+#include <string>
+
+// image dimensions
+const int WIDTH = 768; 
+const int HEIGHT = 512; 
+
+// Helper function: read RAW image data
+std::vector<unsigned char> readRawImage(const std::string& filename) {
+    std::ifstream file(filename, std::ios::binary);
+    if (!file) {
+        std::cerr << "Cannot open the file: " << filename << std::endl;
+        return std::vector<unsigned char>();
+    }
+    
+    // Read the contents of the file into a vector
+    std::vector<unsigned char> buffer(
+        (std::istreambuf_iterator<char>(file)),
+        std::istreambuf_iterator<char>()
+    );
+    return buffer;
+}
+
+// Helper function: write RAW image data
+void writeRawImage(const std::string& filename, 
+                   const std::vector<unsigned char>& image_data) {
+    std::ofstream file(filename, std::ios::binary);
+    file.write(reinterpret_cast<const char*>(&image_data[0]), image_data.size() * sizeof(unsigned char));
+}
+
+// Helper function: clamp pixel values
+inline unsigned char clamp(int value, int low, int high) {
+    return static_cast<unsigned char>(std::max(low, std::min(value, high)));
+}
+
+// Helper function: compute Gaussian weight
+inline double gaussian(double x, double sigma) {
+    return std::exp(-(x * x) / (2 * sigma * sigma)) / (std::sqrt(2 * M_PI) * sigma);
+}
+
+// Function to apply the Non-Local Means filter
+void nonLocalMeansFilter(const std::vector<unsigned char>& image,
+                         std::vector<unsigned char>& result,
+                         int patchSize,
+                         int windowSize,
+                         double h,
+                         double sigma) {
+                         
+    const int halfPatchSize = patchSize / 2;
+    const int halfWindowSize = windowSize / 2;
+    
+    std::vector<std::vector<double> > weights(windowSize, std::vector<double>(windowSize));
+
+    // precompute Gaussian weights
+    for (int i = -halfWindowSize; i <= halfWindowSize; ++i) {
+        for (int j = -halfWindowSize; j <= halfWindowSize; ++j) {
+            weights[i + halfWindowSize][j + halfWindowSize] = gaussian(std::sqrt(i * i + j * j), sigma);
+        }
+    }
+
+    for (int i = 0; i < HEIGHT; ++i) {
+        for (int j = 0; j < WIDTH; ++j) {
+            double weightSum = 0.0;
+            double pixelValue = 0.0;
+
+            for (int wi = -halfWindowSize; wi <= halfWindowSize; ++wi) {
+                for (int wj = -halfWindowSize; wj <= halfWindowSize; ++wj) {
+                    double patchDistance = 0.0;
+
+                    for (int pi = -halfPatchSize; pi <= halfPatchSize; ++pi) {
+                        for (int pj = -halfPatchSize; pj <= halfPatchSize; ++pj) {
+                            int refI = std::max(0, std::min(i + pi, HEIGHT - 1));
+                            int refJ = std::max(0, std::min(j + pj, WIDTH - 1));
+                            int winI = std::max(0, std::min(i + wi + pi, HEIGHT - 1));
+                            int winJ = std::max(0, std::min(j + wj + pj, WIDTH - 1));
+                            
+                            patchDistance += (image[refI * WIDTH + refJ] - image[winI * WIDTH + winJ]) *
+                                             (image[refI * WIDTH + refJ] - image[winI * WIDTH + winJ]);
+                        }
+                    }
+
+                    double w = std::exp(-patchDistance / (h * h)) * weights[wi + halfWindowSize][wj + halfWindowSize];
+                    weightSum += w;
+                    pixelValue += w * image[(i + wi) * WIDTH + (j + wj)];
+                }
+            }
+
+            result[i * WIDTH + j] = clamp(static_cast<int>(pixelValue / weightSum), 0, 255);
+        }
+    }
+}
+
+int main() {
+    std::string inputFilename = "./images/Flower_gray_noisy.raw";
+    std::string nlmOutputFilename = "./outputs/Flower_gray_nlm.raw";
+
+    std::vector<unsigned char> image_data = readRawImage(inputFilename);
+    std::vector<unsigned char> nlm_filtered_image(WIDTH * HEIGHT);
+
+    // filter parameters
+    int patchSize = 10; // Patch size for the local neighborhood
+    int windowSize = 21; // Window size for searching similar patches
+    double h = 16.0; // Filtering parameter, controls decay of the weights, depends on the noise level
+    double sigma = 10.0; // Standard deviation for Gaussian function
+
+    // Apply NLM filter 
+    nonLocalMeansFilter(image_data, nlm_filtered_image, patchSize, windowSize, h, sigma);
+
+    // save the filtered images
+    writeRawImage(nlmOutputFilename, nlm_filtered_image);
+
+    std::cout << "NLM filtering completed." << std::endl;
+
+    return 0;
+}
+
+
+
+p2_PSNR.cpp ================================================================================================================
+#include <vector>
+#include <string>
+#include <cmath>
+#include <limits>
+#include <stdexcept>
+#include <fstream>
+#include <iostream>
+
+// image dimensions
+const int WIDTH = 768; 
+const int HEIGHT = 512; 
+
+// Helper function: read RAW image data
+std::vector<unsigned char> readRawImage(const std::string& filename) {
+    std::ifstream file(filename, std::ios::binary);
+    if (!file) {
+        std::cerr << "Cannot open the file: " << filename << std::endl;
+        return std::vector<unsigned char>();
+    }
+    
+    // Read the contents of the file into a vector
+    std::vector<unsigned char> buffer(
+        (std::istreambuf_iterator<char>(file)),
+        std::istreambuf_iterator<char>()
+    );
+    return buffer;
+}
+
+// Helper function: calculate MSE
+double calculateMSE(const std::vector<unsigned char>& original, 
+                    const std::vector<unsigned char>& denoised, 
+                    int width, 
+                    int height) {
+    if (original.size() != denoised.size()) {
+        throw std::invalid_argument("Images must have the same size for MSE calculation.");
+    }
+
+    double mse = 0.0;
+    for (size_t i = 0; i < original.size(); ++i) {
+        mse += std::pow(original[i] - denoised[i], 2);
+    }
+    mse /= (width * height);
+    return mse;
+}
+
+// Function: calculate PSNR
+double calculatePSNR(const std::vector<unsigned char>& original, 
+                     const std::vector<unsigned char>& denoised, 
+                     int width, 
+                     int height) {
+    double mse = calculateMSE(original, denoised, width, height);
+    if (mse == 0) {
+        return std::numeric_limits<double>::infinity();
+    }
+    double max_pixel_value = 255.0; // For 8-bit images
+    double psnr = 10 * std::log10((max_pixel_value * max_pixel_value) / mse);
+    return psnr;
+}
+
+int main() {
+    std::string originalImageFilename = "./images/Flower_gray.raw";
+
+    std::string guassianFilename = "./outputs/Flower_gray_gaussian.raw";
+    std::string uniformFilename = "./outputs/Flower_gray_uniform.raw";
+    std::string bilateralFilename = "./outputs/Flower_gray_bilateral.raw";
+    std::string nlmFilename = "./outputs/Flower_gray_nlm.raw";
+
+    // Read the original and denoised images into vectors
+    std::vector<unsigned char> originalImage = readRawImage(originalImageFilename);
+    std::vector<unsigned char> guassianImage = readRawImage(guassianFilename);
+    std::vector<unsigned char> uniformImage = readRawImage(uniformFilename);
+    std::vector<unsigned char> bilateralImage = readRawImage(bilateralFilename);
+    std::vector<unsigned char> nlmImage = readRawImage(nlmFilename);
+
+    // Calculate PSNR of Gaussian and uniform denoised images
+    double guassianPSNR = calculatePSNR(originalImage, guassianImage, WIDTH, HEIGHT);
+    std::cout << "PSNR of the Gaussian denoised image: " << guassianPSNR << " dB" << std::endl;
+    
+    double unifornPSNR = calculatePSNR(originalImage, uniformImage, WIDTH, HEIGHT);
+    std::cout << "PSNR of the Uniform denoised image: " << unifornPSNR << " dB" << std::endl;
+
+    double bilateralPSNR = calculatePSNR(originalImage, bilateralImage, WIDTH, HEIGHT);
+    std::cout << "PSNR of the Bilateral denoised image: " << bilateralPSNR << " dB" << std::endl;
+
+    double nlmPSNR = calculatePSNR(originalImage, nlmImage, WIDTH, HEIGHT);
+    std::cout << "PSNR of the NLM denoised image: " << nlmPSNR << " dB" << std::endl;
+
+    return 0;
+}
+
+
+
+p3.cpp ================================================================================================================
+#include <vector>
+#include <algorithm>
+#include <cmath>
+#include <iostream>
+#include <fstream>
+#include <string>
+
+const int WIDTH = 768; // To be adjusted according to your image's width
+const int HEIGHT = 512; // To be adjusted according to your image's height
+
+// Helper function: read RAW image data
+std::vector<unsigned char> readRawImage(const std::string& filename) {
+    std::ifstream file(filename, std::ios::binary);
+    if (!file) {
+        std::cerr << "Cannot open the file: " << filename << std::endl;
+        return std::vector<unsigned char>();
+    }
+    
+    // read the contents of the file into a vector
+    std::vector<unsigned char> buffer(
+        (std::istreambuf_iterator<char>(file)),
+        std::istreambuf_iterator<char>()
+    );
+    return buffer;
+}
+
+// Helper function: write RAW image data
+void writeRawImage(const std::string& filename, 
+                   const std::vector<unsigned char>& image_data) {
+    std::ofstream file(filename, std::ios::binary);
+    file.write(reinterpret_cast<const char*>(&image_data[0]), image_data.size() * sizeof(unsigned char));
+}
+
+// Helper function: calculate the median of a small array
+template <size_t size>
+unsigned char median(std::array<unsigned char, size> &values) {
+    std::nth_element(values.begin(), values.begin() + size / 2, values.end());
+    return values[size / 2];
+}
+
+// Function: median filter for RGB image
+std::vector<unsigned char> applyMedianFilter(const std::vector<unsigned char>& image, 
+                                             int kernelSize) {
+    std::vector<unsigned char> output(image.size());
+    int edge = kernelSize / 2;
+
+    for (int y = 0; y < HEIGHT; ++y) {
+        for (int x = 0; x < WIDTH; ++x) {
+            std::array<std::array<unsigned char, 9>, 3> neighbors; // for each color channel
+
+            // collect neighbors for R, G, B channels
+            for (int dy = -edge; dy <= edge; ++dy) {
+                for (int dx = -edge; dx <= edge; ++dx) {
+                    int nx = std::min(std::max(x + dx, 0), WIDTH - 1);
+                    int ny = std::min(std::max(y + dy, 0), HEIGHT - 1);
+                    for (int channel = 0; channel < 3; ++channel) {
+                        neighbors[channel][3 * (dy + edge) + (dx + edge)] = image[3 * (ny * WIDTH + nx) + channel];
+                    }
+                }
+            }
+
+            // compute median for each channel
+            for (int channel = 0; channel < 3; ++channel) {
+                output[3 * (y * WIDTH + x) + channel] = median(neighbors[channel]);
+            }
+        }
+    }
+
+    return output;
+}
+
+// Helper function: Gaussian function for Bilateral filter
+double gaussianBF(double x, double sigma) {
+    return std::exp(-(x * x) / (2 * sigma * sigma));
+}
+
+// Bilateral filter function for an RGB image
+std::vector<unsigned char> applyBilateralFilter(const std::vector<unsigned char>& image, 
+                                                int kernelSize, 
+                                                double sigmaColor, 
+                                                double sigmaSpace) {
+
+    std::vector<unsigned char> output(image.size());
+    int edge = kernelSize / 2;
+
+    // pre-compute Gaussian space weights
+    std::vector<double> spaceWeights(kernelSize * kernelSize);
+    for (int i = -edge; i <= edge; ++i) {
+        for (int j = -edge; j <= edge; ++j) {
+            spaceWeights[(i + edge) * kernelSize + (j + edge)] = gaussianBF(std::sqrt(i * i + j * j), sigmaSpace);
+        }
+    }
+
+    // bilateral filter
+    for (int y = 0; y < HEIGHT; ++y) {
+        for (int x = 0; x < WIDTH; ++x) {
+            for (int channel = 0; channel < 3; ++channel) {
+                double iFiltered = 0;
+                double wP = 0;
+                unsigned char centerPixel = image[3 * (y * WIDTH + x) + channel];
+
+                for (int dy = -edge; dy <= edge; ++dy) {
+                    for (int dx = -edge; dx <= edge; ++dx) {
+                        int nx = std::min(std::max(x + dx, 0), WIDTH - 1);
+                        int ny = std::min(std::max(y + dy, 0), HEIGHT - 1);
+                        unsigned char neighborPixel = image[3 * (ny * WIDTH + nx) + channel];
+
+                        double w = spaceWeights[(dy + edge) * kernelSize + (dx + edge)] * gaussianBF(centerPixel - neighborPixel, sigmaColor);
+                        iFiltered += neighborPixel * w;
+                        wP += w;
+                    }
+                }
+
+                output[3 * (y * WIDTH + x) + channel] = static_cast<unsigned char>(iFiltered / wP);
+            }
+        }
+    }
+    
+    return output;
+}
+
+// Helper Function: Gaussian function
+double gaussian(double x, double sigma) {
+    return std::exp(-(x * x) / (2 * sigma * sigma)) / (std::sqrt(2 * M_PI) * sigma);
+}
+
+// Helper function: to clamp pixel values
+inline unsigned char clamp(int value, int low, int high) {
+    return static_cast<unsigned char>(std::max(low, std::min(value, high)));
+}
+
+// Function: apply Gaussian filter for RGB image
+std::vector<unsigned char> applyGaussianFilter(const std::vector<unsigned char>& image, int kernelSize, double sigma) {
+    std::vector<unsigned char> output(image.size());
+    int edge = kernelSize / 2;
+    std::vector<double> kernel(kernelSize * kernelSize);
+    double sum = 0.0;
+    double twoSigmaSquare = 2.0 * sigma * sigma;
+
+    // generate Gaussian kernel
+    for (int i = -edge; i <= edge; ++i) {
+        for (int j = -edge; j <= edge; ++j) {
+            int index = (i + edge) * kernelSize + (j + edge);
+            kernel[index] = gaussian(std::sqrt(i * i + j * j), sigma);
+            sum += kernel[index];
+        }
+    }
+
+    // normalize the kernel
+    for (size_t i = 0; i < kernel.size(); ++i) {
+        double &value = kernel[i];
+        value /= sum;
+    }
+
+    // apply Gaussian filter
+    for (int y = 0; y < HEIGHT; ++y) {
+        for (int x = 0; x < WIDTH; ++x) {
+            for (int channel = 0; channel < 3; ++channel) {
+                double weightedSum = 0.0;
+
+                for (int dy = -edge; dy <= edge; ++dy) {
+                    for (int dx = -edge; dx <= edge; ++dx) {
+                        int nx = std::min(std::max(x + dx, 0), WIDTH - 1);
+                        int ny = std::min(std::max(y + dy, 0), HEIGHT - 1);
+                        int index = (dy + edge) * kernelSize + (dx + edge);
+                        weightedSum += image[3 * (ny * WIDTH + nx) + channel] * kernel[index];
+                    }
+                }
+
+                output[3 * (y * WIDTH + x) + channel] = clamp(static_cast<int>(weightedSum), 0, 255);
+            }
+        }
+    }
+
+    return output;
+}
+
+// Helper function: linear combination of two images
+std::vector<unsigned char> linearCombine(const std::vector<unsigned char>& bilateralImage,
+                                         const std::vector<unsigned char>& gaussianImage,
+                                         double alpha, 
+                                         double beta) {
+    std::vector<unsigned char> output(bilateralImage.size());
+    
+    for (size_t i = 0; i < bilateralImage.size(); ++i) {
+        // Apply the linear combination formula: output = alpha * bilateral + beta * gaussian
+        int combinedValue = static_cast<int>(alpha * bilateralImage[i] - beta * gaussianImage[i]);
+        output[i] = clamp(combinedValue, 0, 255);
+    }
+
+    return output;
+}
+
+
+int main() {
+    std::string inputFilename = "./images/Flower_noisy.raw";
+    std::string medianFilterdFilename = "./outputs/Flower_median_filtered.raw";
+    std::string waterColoredFilename = "./outputs/Flower_water_colored.raw";
+
+    std::vector<unsigned char> inputImage = readRawImage(inputFilename);
+
+    // Apply median filter
+    int medianKernelSize = 3; 
+    std::vector<unsigned char> medianFiltered = applyMedianFilter(inputImage, medianKernelSize);
+
+    // save the median filtered image
+    writeRawImage(medianFilterdFilename, medianFiltered);
+
+    // Apply bilateral filter
+    int bilateralKernelSize = 5; 
+    double sigmaColor = 20.0; 
+    double sigmaSpace = 10.0;
+    int K = 10;
+    std::vector<unsigned char> bilateralFiltered = applyBilateralFilter(medianFiltered, bilateralKernelSize, sigmaColor, sigmaSpace);
+    for (int i = 1; i < K; ++i) {
+        bilateralFiltered = applyBilateralFilter(bilateralFiltered, bilateralKernelSize, sigmaColor, sigmaSpace);
+    }
+
+    // Apply Gaussian filter
+    int gaussianKernelSize = 7; 
+    double gaussianSigma = 2; 
+    std::vector<unsigned char> gaussianFiltered = applyGaussianFilter(inputImage, gaussianKernelSize, gaussianSigma);
+
+    // combine the two filtered images
+    double alpha = 1.4;
+    double beta = 0.4;
+    std::vector<unsigned char> combinedImage = linearCombine(bilateralFiltered, gaussianFiltered, alpha, beta);
+
+    // save the fianl combined image
+    writeRawImage(waterColoredFilename, combinedImage);
+
+    return 0;
+}
